@@ -1,0 +1,100 @@
+import os
+import pandas as pd
+import xgboost as xgb
+import numpy as np
+from sklearn.preprocessing import Imputer
+from sklearn.cross_validation import cross_val_score
+from sklearn.preprocessing import StandardScaler
+import sklearn.preprocessing
+from sklearn import cross_validation
+from bayes_opt import BayesianOptimization
+
+df = pd.read_pickle('df_train.pkl')
+
+def open_files(filename):
+    f = open(filename, 'rU')
+    col = []
+    for line in f:
+        col.append(line.strip())
+    f.close()
+
+    return col
+
+def impute(X, c):
+    imp = Imputer(missing_values='NaN',strategy='mean', axis=0)
+   
+    for i in range(len(c)):
+        df = X[[c[i]]]
+        #print c[i]
+        imp.fit(df[:8000])
+        df_tran= imp.transform(df)
+        X[[c[i]]] = df_tran
+
+    return X
+
+def changeX(df):
+    for i in range(len(df)):
+        if df[i]=='X':
+            df[i] = 1
+    return df
+
+def scaler(X, c):
+    scal = StandardScaler()
+
+    for i in range(len(c)):
+        df = X[[c[i]]]
+        df_tran= scal.fit_transform(df)      
+        X[[c[i]]] = df_tran
+        
+    return X
+
+def CV(X, y):
+    X_train, X_test, y_train, y_test = cross_validation.train_test_split(X, y, test_size=0.2, random_state=0)
+    return X_train, X_test, y_train, y_test
+
+def extract(data_frame, col):
+
+    ex_df = data_frame.loc[:,col]
+    return ex_df
+    
+df['dx_diff'] = df.dx_prspct_med_risk_qt - df.dx_prspct_med_risk_qt_p
+
+df['cops2_diff']= df.cops2_qt -df.cops2_qt_p
+
+df['rx_prspct_ttl_risk_diff'] = df.rx_prspct_ttl_risk_qt - df.rx_prspct_ttl_risk_qt_p
+
+cg_2014 = df[['cg_2014']]
+df[['cg_2014']]=cg_2014.apply(changeX)
+
+c = open_files('x15list.txt')
+df1 = impute(df, c)
+df1 = scaler(df1, c)
+print 'df1:', type(df1), df1.shape
+df1 = extract(df1,c)
+print 'df1 again:', type(df1), df1.shape
+y = df[['hu_01']]
+y = y.values.ravel()
+print 'y:', type(y), y.shape
+
+List = CV(df1, y)
+
+def xgbcv(n_estimators, max_depth, min_child_weight, subsample, colsample_bytree, reg_alpha, scale_pos_weight):
+    return cross_val_score(xgb.XGBClassifier(learning_rate =0.1,
+                                             n_estimators= int(n_estimators),
+                                             max_depth = int(max_depth),
+                                             min_child_weight=int(min_child_weight),
+                                             subsample = min(subsample,1),
+                                             colsample_bytree = min (colsample_bytree,1),
+                                             reg_alpha = min(reg_alpha,1),
+                                             scale_pos_weight = scale_pos_weight,
+                                             objective= 'binary:logistic',
+                                             nthread=-1,
+                                             seed=27),
+                           List[0], List[2], scoring='roc_auc', n_jobs=-1,cv=3).mean()
+
+xgbBO = BayesianOptimization(xgbcv,{'n_estimators': (100, 250), 'max_depth': (5, 20),'min_child_weight': (6, 20),
+                                    'subsample': (0.7, 0.95), 'colsample_bytree': (0.7, 0.95),'reg_alpha':(0,0.95),
+                                    'scale_pos_weight':(1,10)})
+
+xgbBO.maximize(init_points=5,n_iter=50)
+
